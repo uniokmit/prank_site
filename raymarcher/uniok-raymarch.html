@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Supernova</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#000;overflow:hidden;width:100vw;height:100vh;}
+  canvas{display:block;width:100%;height:100%;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<script id="vert" type="x-shader/x-vertex">
+attribute vec2 a_pos;
+void main(){gl_Position=vec4(a_pos,0.0,1.0);}
+</script>
+
+<script id="frag" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2  u_res;
+uniform float u_time;
+
+/*=== HASH / NOISE ===================================================*/
+float h11(float n){return fract(sin(n)*43758.5453);}
+float h21(vec2 p) {return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float h31(vec3 p) {return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5453);}
+
+float vn3(vec3 p){
+  vec3 i=floor(p),f=fract(p),u=f*f*(3.0-2.0*f);
+  return mix(
+    mix(mix(h31(i),         h31(i+vec3(1,0,0)),u.x),
+        mix(h31(i+vec3(0,1,0)),h31(i+vec3(1,1,0)),u.x),u.y),
+    mix(mix(h31(i+vec3(0,0,1)),h31(i+vec3(1,0,1)),u.x),
+        mix(h31(i+vec3(0,1,1)),h31(i+vec3(1,1,1)),u.x),u.y),u.z);
+}
+
+float fbm(vec3 p){
+  float v=0.0,a=0.52;
+  for(int i=0;i<7;i++){
+    v+=a*vn3(p);a*=0.48;
+    p=p*2.07+vec3(1.7,0.9,2.3);
+  }
+  return v;
+}
+
+float turbulence(vec3 p){
+  // Double domain warp for thick lumpy nebula clouds
+  vec3 q=vec3(
+    fbm(p+vec3(0.0,0.0,u_time*0.022)),
+    fbm(p+vec3(5.2,1.3,u_time*0.018)),
+    fbm(p+vec3(1.7,9.2,u_time*0.016))
+  );
+  vec3 r2=vec3(
+    fbm(p+1.8*q+vec3(1.7,9.2,u_time*0.012)),
+    fbm(p+1.8*q+vec3(8.3,2.8,u_time*0.010)),
+    fbm(p+1.8*q+vec3(0.0,0.0,u_time*0.008))
+  );
+  return fbm(p+2.0*r2);
+}
+
+/*=== SPIKES — exactly matching reference's ~25 irregular rays ========*/
+float spikes(vec2 uv){
+  float ang=atan(uv.y,uv.x);
+  float r=length(uv);
+  float slow=u_time*0.015; // very slow rotation
+
+  float s=0.0;
+  // Long prominent spikes (reach screen edges)
+  s+=pow(max(0.0,sin(ang*5.0 +0.00+slow)),  32.0)*1.6;
+  s+=pow(max(0.0,sin(ang*7.0 +1.10+slow)),  44.0)*1.4;
+  s+=pow(max(0.0,sin(ang*9.0 +2.30+slow)),  38.0)*1.3;
+  s+=pow(max(0.0,sin(ang*4.0 +3.50+slow)),  24.0)*1.5;
+  s+=pow(max(0.0,sin(ang*6.0 +0.80+slow)),  36.0)*1.2;
+  s+=pow(max(0.0,sin(ang*11.0+1.60+slow)),  56.0)*1.1;
+  s+=pow(max(0.0,sin(ang*3.0 +2.80+slow)),  18.0)*1.0;
+  s+=pow(max(0.0,sin(ang*8.0 +4.20+slow)),  48.0)*1.0;
+
+  // Medium spikes
+  s+=pow(max(0.0,sin(ang*13.0+0.40+slow)),  66.0)*0.85;
+  s+=pow(max(0.0,sin(ang*10.0+3.10+slow)),  54.0)*0.80;
+  s+=pow(max(0.0,sin(ang*15.0+1.90+slow)),  80.0)*0.75;
+  s+=pow(max(0.0,sin(ang*12.0+2.60+slow)),  64.0)*0.70;
+
+  // Fine thin spikes
+  s+=pow(max(0.0,sin(ang*18.0+0.70+slow)),  95.0)*0.60;
+  s+=pow(max(0.0,sin(ang*21.0+1.40+slow)), 115.0)*0.55;
+  s+=pow(max(0.0,sin(ang*16.0+3.80+slow)),  88.0)*0.58;
+  s+=pow(max(0.0,sin(ang*24.0+2.20+slow)), 140.0)*0.45;
+  s+=pow(max(0.0,sin(ang*20.0+0.30+slow)), 110.0)*0.50;
+
+  // Long rays: slow 1/(r^2) falloff → reach screen edge
+  float longS =
+      pow(max(0.0,sin(ang*5.0 +0.00+slow)),32.0)
+    + pow(max(0.0,sin(ang*4.0 +3.50+slow)),24.0)
+    + pow(max(0.0,sin(ang*7.0 +1.10+slow)),44.0)
+    + pow(max(0.0,sin(ang*3.0 +2.80+slow)),18.0);
+  longS *= 1.0/(1.0+r*r*1.4);
+
+  // Short/medium rays: exponential falloff
+  s *= exp(-r*2.8);
+
+  return clamp(s*1.1 + longS*1.3, 0.0, 1.0);
+}
+
+// Spike colour: white at base → hot pink → blue-violet at tips
+vec3 spikeCol(float r){
+  vec3 cW =vec3(1.0,1.0,1.0);
+  vec3 cP =vec3(0.95,0.25,0.80);  // hot pink
+  vec3 cBV=vec3(0.25,0.10,0.70);  // blue-violet
+  vec3 cDB=vec3(0.08,0.03,0.28);  // deep blue (far tips)
+  float t=clamp(r,0.0,1.0);
+  if(t<0.18) return mix(cW, cP,  t/0.18);
+  if(t<0.55) return mix(cP, cBV,(t-0.18)/0.37);
+             return mix(cBV,cDB,(t-0.55)/0.45);
+}
+
+/*=== DIAGONAL LENS STREAK ===========================================*/
+// Reference: streak goes from upper-right area down to lower-left
+// It is LEFT of center by ~25% of screen width
+// Two bright nodes visible on it
+float lensStreakMask(vec2 uv){
+  // Streak direction: angle ~108deg from +x (going lower-left)
+  vec2 sd=normalize(vec2(-0.32,1.0));
+  float perp=dot(uv,vec2(-sd.y,sd.x)); // perpendicular distance
+  float offset=perp+0.23;              // shift left
+
+  float core=exp(-offset*offset*8000.0);  // razor thin white
+  float mid =exp(-offset*offset* 350.0)*0.40;
+  float glow=exp(-offset*offset*  30.0)*0.15;
+
+  // Length mask
+  float along=dot(uv,sd);
+  float len=smoothstep(1.8,0.3,abs(along+0.05));
+
+  // Two bright nodes on the streak
+  float n1=exp(-pow(along-(-0.35),2.0)*90.0)*0.7*(core+mid);
+  float n2=exp(-pow(along-0.50,2.0)*140.0)*0.4*(core+mid);
+
+  return clamp((core+mid+glow+n1+n2)*len, 0.0,1.0);
+}
+
+vec3 lensStreakColor(vec2 uv){
+  vec2 sd=normalize(vec2(-0.32,1.0));
+  float perp=dot(uv,vec2(-sd.y,sd.x));
+  float d=abs(perp+0.23);
+  // White center → bright purple → dark blue
+  return mix(
+    vec3(1.0,1.0,1.0),
+    mix(vec3(0.55,0.20,0.95),vec3(0.10,0.05,0.35),smoothstep(0.0,0.10,d)),
+    smoothstep(0.001,0.05,d)
+  );
+}
+
+/*=== VOLUME DENSITY — thick nebula cloud ============================*/
+float density(vec3 p){
+  float r=length(p);
+  float t=turbulence(p*0.65);
+
+  // Main explosion shell
+  float shell=exp(-pow((r-1.08)*1.4,2.0))*1.3;
+  // Inner dense corona
+  float inner=exp(-r*4.2)*0.55;
+
+  float d=(shell*pow(clamp(t-0.18,0.0,1.0),1.25) + inner);
+
+  // Hollow very center — replaced by analytic white core
+  d*=smoothstep(0.06,0.30,r);
+
+  // ASYMMETRY — reference cloud is:
+  // - heavier on bottom-left quadrant
+  // - thinner on top-right
+  // - dark "channels" between spikes visible
+  float ang=atan(p.y,p.x);
+
+  // Bottom-left heavier (ang ~ -2.4 rad = 225deg)
+  float asym = 0.65
+    + 0.35*sin(ang*1.0+3.9+u_time*0.06)   // bottom-left bulk
+    + 0.20*sin(ang*3.0+1.2+t*5.0)          // medium lumps
+    + 0.10*sin(ang*7.0+0.5+t*9.0);         // fine texture
+
+  // Extra density below center
+  float belowBoost=smoothstep(0.0,-1.0,p.y)*smoothstep(0.15,1.0,r)*0.45;
+  asym+=belowBoost;
+
+  // Dark radial channels between spikes (makes spikes stand out)
+  float channels=0.5+0.5*pow(abs(sin(ang*10.0+u_time*0.04)),2.5);
+  d*=asym*channels;
+
+  return clamp(d,0.0,1.0);
+}
+
+/*=== COLOUR MAP — precisely matching reference =======================*/
+// white → cream-yellow → warm orange → vivid magenta-pink → purple → deep blue-purple → black
+vec3 nebCol(float r, float ang, float tb){
+  float hv=0.5+0.5*sin(ang*1.8+u_time*0.035+tb*2.5);
+
+  vec3 cW =vec3(1.00,1.00,1.00);
+  vec3 cCY=vec3(1.00,0.93,0.65); // cream-yellow
+  vec3 cO =vec3(1.00,0.65,0.28); // warm orange
+  vec3 cM =mix(vec3(0.98,0.22,0.78),vec3(0.88,0.12,0.92),hv); // hot magenta/pink
+  vec3 cP =mix(vec3(0.42,0.08,0.72),vec3(0.28,0.05,0.60),hv); // purple
+  vec3 cBP=mix(vec3(0.12,0.04,0.35),vec3(0.08,0.02,0.25),hv); // deep blue-purple
+  vec3 cBK=vec3(0.02,0.01,0.06);  // near-black
+
+  vec3 col;
+  if     (r<0.07) col=cW;
+  else if(r<0.18) col=mix(cW, cCY,(r-0.07)/0.11);
+  else if(r<0.30) col=mix(cCY,cO, (r-0.18)/0.12);
+  else if(r<0.52) col=mix(cO, cM, (r-0.30)/0.22);
+  else if(r<0.72) col=mix(cM, cP, (r-0.52)/0.20);
+  else if(r<0.90) col=mix(cP, cBP,(r-0.72)/0.18);
+  else            col=mix(cBP,cBK,(r-0.90)/0.10);
+  return col;
+}
+
+/*=== DUST SPECKS ====================================================*/
+// Reference has ~8-10 clearly visible white dots scattered
+float dustDots(vec3 p){
+  vec3 cell=floor(p*20.0);
+  vec3 fr=fract(p*20.0)-0.5;
+  float hv=h31(cell);
+  // Twinkle slowly
+  float tw=0.55+0.45*sin(hv*91.3+u_time*(0.8+hv*2.5));
+  float dd=length(fr)-0.06*(0.4+0.6*hv);
+  float mask=smoothstep(0.0,1.6,length(p))*smoothstep(2.0,0.4,length(p)); // ring of dust
+  return smoothstep(0.06,0.0,dd)*tw*smoothstep(0.08,0.22,hv)*0.6*mask;
+}
+
+/*=== MAIN ===========================================================*/
+void main(){
+  vec2 uv=(gl_FragCoord.xy-0.5*u_res)/min(u_res.x,u_res.y);
+
+  // Center: slightly upper-center like reference
+  uv-=vec2(0.02,0.07);
+
+  // Ray
+  vec3 ro=vec3(0.0,0.0,4.2);
+  vec3 rd=normalize(vec3(uv,-1.85));
+
+  // Slow breathing
+  float breathe=1.0+0.012*sin(u_time*0.18);
+
+  /*── RAYMARCH 120 STEPS ──*/
+  const int   S=120;
+  const float TMIN=0.05, TMAX=7.5;
+  const float DT=(TMAX-TMIN)/float(S);
+
+  vec3  aC=vec3(0.0);
+  float aA=0.0;
+  float tt=TMIN;
+
+  for(int i=0;i<S;i++){
+    if(aA>0.990) break;
+    vec3 p=ro+rd*tt;
+    vec3 ps=p/breathe;
+    float r=length(ps);
+    float ang=atan(ps.y,ps.x);
+    float tb=fbm(ps*0.8);
+
+    float d=density(ps);
+    d+=dustDots(ps+vec3(u_time*0.010,u_time*0.007,u_time*0.005));
+    d*=DT*2.8;
+
+    if(d>0.0002){
+      vec3 col=nebCol(r,ang,tb);
+      float alp=1.0-exp(-d*5.5);
+      vec3 contrib=col*alp;
+      // Scattering: brighter where looking toward core
+      float scat=exp(-r*1.5)*0.3;
+      contrib+=vec3(0.9,0.7,1.0)*scat*alp;
+      aC+=(1.0-aA)*contrib;
+      aA+=(1.0-aA)*alp;
+    }
+    tt+=DT;
+  }
+
+  float rUV=length(uv);
+
+  /*── ANALYTIC WHITE CORE (large, round, overexposed) ──*/
+  // Reference: white area ~40% of min(w,h) radius
+  float R=0.34;
+  // Main overexposed blob
+  float blob =exp(-rUV*rUV/(R*R*0.14))*6.0;
+  // Soft wide extension
+  float soft =exp(-rUV*rUV/(R*R*0.50))*2.0;
+  // Yellow-cream corona
+  float ycor =exp(-rUV*rUV/(R*R*1.20))*1.1;
+  // Pink outer halo
+  float phal =exp(-rUV*rUV/(R*R*3.00))*0.55;
+  // Slight ellipse (core not perfectly circular in reference)
+  float ellip=exp(-(uv.x*uv.x*12.5+uv.y*uv.y*10.0)/(R*R*0.22))*3.5;
+
+  vec3 coreFinal=
+      vec3(1.00,1.00,1.00)*clamp(blob+soft+ellip, 0.0,3.0)
+    + vec3(1.00,0.90,0.55)*clamp(ycor,0.0,1.1)
+    + vec3(0.95,0.30,0.75)*clamp(phal,0.0,0.6);
+
+  /*── SPIKES ──*/
+  float sp=spikes(uv);
+  vec3 spContrib=spikeCol(rUV)*sp*(0.9+0.4*(1.0-aA));
+
+  /*── BRIGHT PINK RING around core ──*/
+  // Reference has a very vivid pink-magenta ring at r~0.35-0.55
+  float ringR=0.44;
+  float ring=exp(-pow((rUV-ringR)*4.5,2.0))*1.8;
+  // Modulate by spikes to make it jagged
+  ring*=(0.4+0.6*spikes(uv*0.8));
+  vec3 ringContrib=vec3(0.95,0.22,0.78)*ring*(1.0-aA*0.5);
+
+  /*── LENS STREAK ──*/
+  float ls=lensStreakMask(uv);
+  vec3 lsContrib=lensStreakColor(uv)*ls*1.2;
+
+  /*── DEEP BLUE-PURPLE CLOUD (background of nebula) ──*/
+  // In reference this is very dark blue-purple around and outside the explosion
+  float bgNoise=fbm(vec3(uv*1.2,u_time*0.008));
+  float bgCloud=smoothstep(0.40,0.70,bgNoise)*exp(-rUV*rUV*0.6);
+  vec3 bgContrib=vec3(0.05,0.02,0.18)*bgCloud*1.5;
+  // Ambient very subtle purple-blue
+  bgContrib+=vec3(0.02,0.01,0.07)*exp(-rUV*rUV*0.35)*0.5;
+
+  /*── COMPOSE ──*/
+  vec3 col=bgContrib + aC + coreFinal + spContrib + ringContrib + lsContrib;
+
+  /*── TONE MAP — Reinhard + exposure ──*/
+  col=col/(col+vec3(0.78));
+  col=pow(col,vec3(0.82));
+  col=col*1.08-0.008;
+
+  /*── FILM GRAIN ──*/
+  float gs=floor(u_time*22.0);
+  col+=(h21(gl_FragCoord.xy+gs)-0.5)*0.028;
+
+  /*── VIGNETTE — hard black edges like reference ──*/
+  float vig=1.0-smoothstep(0.42,1.55,rUV*1.0);
+  col*=vig*vig;
+
+  /*── CHROMATIC ABERRATION ──*/
+  float ab=rUV*rUV*0.006;
+  col.r=col.r*(1.0+ab*2.0);
+  col.b=col.b*(1.0+ab*1.2);
+
+  gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);
+}
+</script>
+
+<script>
+(function(){
+  const canvas=document.getElementById('c');
+  const gl=canvas.getContext('webgl',{antialias:false,alpha:false,powerPreference:'high-performance'});
+  if(!gl){document.body.innerHTML='<p style="color:#fff;padding:2rem">WebGL not supported.</p>';return;}
+
+  function compile(type,src){
+    const sh=gl.createShader(type);
+    gl.shaderSource(sh,src);gl.compileShader(sh);
+    if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)){
+      console.error('SHADER ERROR:',gl.getShaderInfoLog(sh));return null;
+    }
+    return sh;
+  }
+  const vs=compile(gl.VERTEX_SHADER,  document.getElementById('vert').textContent);
+  const fs=compile(gl.FRAGMENT_SHADER,document.getElementById('frag').textContent);
+  if(!vs||!fs){return;}
+
+  const prog=gl.createProgram();
+  gl.attachShader(prog,vs);gl.attachShader(prog,fs);gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){
+    console.error('LINK ERROR:',gl.getProgramInfoLog(prog));return;
+  }
+  gl.useProgram(prog);
+
+  const buf=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(prog,'a_pos');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+
+  const uRes =gl.getUniformLocation(prog,'u_res');
+  const uTime=gl.getUniformLocation(prog,'u_time');
+
+  function resize(){
+    canvas.width =window.innerWidth;
+    canvas.height=window.innerHeight;
+    gl.viewport(0,0,canvas.width,canvas.height);
+  }
+  window.addEventListener('resize',resize);
+  resize();
+
+  const t0=performance.now();
+  (function frame(){
+    const t=(performance.now()-t0)/1000.0;
+    gl.uniform2f(uRes,canvas.width,canvas.height);
+    gl.uniform1f(uTime,t);
+    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    requestAnimationFrame(frame);
+  })();
+})();
+</script>
+</body>
+</html>
