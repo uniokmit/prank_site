@@ -223,7 +223,7 @@
     // 3. Inject the Heavy Volume Shader via iframe
     // This allows the Raymarcher to render without killing this page's DOM or Audio
     const shaderFrame = document.getElementById('shader-container');
-    shaderFrame.src = '/raymarcher/uniok-raymarch.html';
+    shaderFrame.src = './raymarcher/uniok-raymarch.html';
     
     // Fade in the shader frame after a slight delay to let it compile
     setTimeout(() => {
@@ -235,7 +235,7 @@
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     
     try {
-      const res = await fetch('/audio/audio.mp3');
+      const res = await fetch('./audio/audio.mp3');
       const arrBuf = await res.arrayBuffer();
       const decoded = await audioCtx.decodeAudioData(arrBuf);
 
